@@ -1,0 +1,156 @@
+---
+- name: Set iptables rules
+  hosts: all
+  become: true
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - iptables-persistent
+
+    - name: Allow incoming traffic on ports 6443, 443, and 80
+      ansible.builtin.iptables:
+        chain: INPUT
+        protocol: tcp
+        destination_port: "{{ item }}"
+        jump: ACCEPT
+        action: insert
+      loop:
+        - 6443
+        - 443
+        - 80
+
+    - name: Allow incoming traffic for Kubernetes cluster
+      ansible.builtin.iptables:
+        chain: INPUT
+        protocol: tcp
+        source: "{{ lan_subnet }}"
+        destination_port: "{{ item.port }}"
+        jump: ACCEPT
+        action: insert
+      loop:
+        - { port: 2379 }
+        - { port: 2380 }
+        - { port: 6443 }
+        - { port: 10250 }
+
+    - name: Allow incoming traffic for Kubernetes cluster
+      ansible.builtin.iptables:
+        chain: INPUT
+        protocol: udp
+        source: "{{ lan_subnet }}"
+        destination_port: "{{ item.port }}"
+        jump: ACCEPT
+        action: insert
+      loop:
+        - { port: 8472 }
+        - { port: 51820 }
+        - { port: 51821 }
+
+    - name: Persist iptables changes
+      shell: iptables-save > /etc/iptables/rules.v4
+
+- name: Install Docker
+  hosts: all
+  become: true
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - ca-certificates
+        - curl
+        - gnupg
+        - nano
+
+    - name: Add Docker GPG apt Key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: deb https://download.docker.com/linux/ubuntu focal stable
+        state: present
+
+    - name: Update apt cache (again to include Docker repository)
+      apt:
+        update_cache: yes
+
+    - name: Install Docker and related packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+
+- name: Install K3S
+  hosts: all
+  become: true
+  tasks:
+    - name: Install K3s
+      shell: curl -sfL https://get.k3s.io | sh -s - --tls-san 127.0.0.1 --tls-san {{ ansible_default_ipv4.address }} --tls-san {{ ansible_ssh_host }} --write-kubeconfig-mode=644
+      args:
+        creates: /etc/rancher/k3s
+
+- name: Fetch k3s config from the master
+  hosts: all
+  tasks:
+    - name: Fetch k3s config from the remote host
+      become: true
+      slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: k3s_config
+
+    - name: Decode k3s config content
+      set_fact:
+        k3s_config_content: "{{ k3s_config.content | b64decode }}"
+
+    - name: Decode k3s config content and replace "default" with hostname from inventory file
+      set_fact:
+        k3s_config_content: "{{ k3s_config_content | replace('default', inventory_hostname) }}"
+
+    - name: Replace IP address with host address from inventory file
+      set_fact:
+        k3s_config_content: "{{ k3s_config_content | replace('127.0.0.1', ansible_ssh_host) }}"
+
+    - name: Check if ~/.kube directory exists
+      stat:
+        path: ~/.kube
+      delegate_to: localhost
+      register: kube_dir_stat
+
+    - name: Create ~/.kube directory
+      file:
+        path: ~/.kube
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      when: not kube_dir_stat.stat.exists
+
+    - name: Insert k3s config
+      blockinfile:
+        path: ~/.kube/config.{{ inventory_hostname }}
+        block: "{{ k3s_config_content }}"
+        create: yes
+      delegate_to: localhost
+
+    - name: Copy file with owner and permissions
+      become: true
+      fetch:
+        flat: yes
+        src: /var/lib/rancher/k3s/server/node-token
+        dest: /tmp/node-token

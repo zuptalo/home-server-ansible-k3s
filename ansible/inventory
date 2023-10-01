@@ -1,0 +1,2 @@
+[all]
+home-server ansible_ssh_host=example.com ansible_ssh_user=ubuntu lan_subnet=192.168.1.0/24

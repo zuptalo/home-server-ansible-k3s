@@ -1,0 +1,48 @@
+---
+- name: Uninstall Docker and K3s
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Uninstall K3s
+      shell: /usr/local/bin/k3s-uninstall.sh 2>/dev/null
+      ignore_errors: true
+
+    - name: Remove firewall rules
+      shell: |
+        iptables -D INPUT -p tcp --dport 80 -j ACCEPT
+        iptables -D INPUT -p tcp --dport 443 -j ACCEPT
+        iptables -D INPUT -p tcp --dport 6443 -j ACCEPT
+        iptables -D INPUT -s "{{ lan_subnet }}" -p tcp --dport 2379 -j ACCEPT
+        iptables -D INPUT -s "{{ lan_subnet }}" -p tcp --dport 2380 -j ACCEPT
+        iptables -D INPUT -s "{{ lan_subnet }}" -p tcp --dport 6443 -j ACCEPT
+        iptables -D INPUT -s "{{ lan_subnet }}" -p tcp --dport 10250 -j ACCEPT
+        iptables -D INPUT -s "{{ lan_subnet }}" -p udp --dport 8472 -j ACCEPT
+        iptables -D INPUT -s "{{ lan_subnet }}" -p udp --dport 51820 -j ACCEPT
+        iptables -D INPUT -s "{{ lan_subnet }}" -p udp --dport 51821 -j ACCEPT
+      args:
+        executable: /bin/bash
+
+    - name: Persist iptables changes
+      shell: iptables-save > /etc/iptables/rules.v4
+
+    - name: Uninstall installed packages
+      apt:
+        name: "{{ item }}"
+        state: absent
+      with_items:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+        - iptables-persistent
+        - ca-certificates
+        - curl
+        - gnupg
+        - nano
+
+    - name: Remove config file from the local machine
+      file:
+        path: ~/.kube/config.{{ inventory_hostname }}
+        state: absent
+      delegate_to: localhost
+      become: false

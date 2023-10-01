@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: home-assistant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: home-assistant
+  template:
+    metadata:
+      labels:
+        app: home-assistant
+    spec:
+      hostNetwork: true
+      containers:
+        - name: home-assistant
+          image: homeassistant/home-assistant:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8123
+          volumeMounts:
+            - name: config-volume
+              mountPath: /config
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+                - NET_BROADCAST
+      volumes:
+        - name: config-volume
+          persistentVolumeClaim:
+            claimName: home-assistant-config-pvc
